@@ -1,7 +1,6 @@
 package rtmp
 
 import (
-	"bufio"
 	"crypto/rand"
 	"encoding/binary"
 	"io"
@@ -29,11 +28,13 @@ func (c *chunkC0S0) Bytes() []byte {
 	return []byte{c.version}
 }
 
-func readC0S0(br *bufio.Reader) (*chunkC0S0, error) {
-	ver, err := br.ReadByte()
+func readC0S0(br io.Reader) (*chunkC0S0, error) {
+	vv := make([]byte, 1)
+	_, err := io.ReadFull(br, vv)
 	if err != nil {
 		return nil, err
 	}
+	ver := vv[0]
 	return &chunkC0S0{
 		version: ver,
 	}, nil
@@ -77,9 +78,9 @@ func (c *chunkC1S1) Bytes() []byte {
 	return chunk
 }
 
-func readC1S1(br *bufio.Reader) (*chunkC1S1, error) {
+func readC1S1(br io.Reader) (*chunkC1S1, error) {
 	chunk := make([]byte, 1536)
-	_, err := io.ReadAtLeast(br, chunk, 1536)
+	_, err := io.ReadFull(br, chunk)
 	if err != nil {
 		return nil, err
 	}
@@ -130,9 +131,9 @@ func (c *chunkC2S2) Bytes() []byte {
 	return chunk
 }
 
-func readC2S2(br *bufio.Reader) (*chunkC2S2, error) {
+func readC2S2(br io.Reader) (*chunkC2S2, error) {
 	chunk := make([]byte, 1536)
-	_, err := io.ReadAtLeast(br, chunk, 1536)
+	_, err := io.ReadFull(br, chunk)
 	if err != nil {
 		return nil, err
 	}

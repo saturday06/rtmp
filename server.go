@@ -59,13 +59,11 @@ func (srv *Server) Serve(l net.Listener) error {
 
 func (srv *Server) newConn(nc net.Conn) *conn {
 	return &conn{
-		netconn:  nc,
-		server:   srv,
-		bufr:     bufio.NewReaderSize(nc, 1024*64),
-		bufw:     bufio.NewWriterSize(nc, 1024*64),
-		readbuf:  make([]byte, 4096),
-		writebuf: make([]byte, 4096),
-		state:    StateUninitialized,
+		netconn: nc,
+		server:  srv,
+		bufr:    nc,
+		bufw:    bufio.NewWriterSize(nc, 1024*64),
+		state:   StateUninitialized,
 	}
 }
 

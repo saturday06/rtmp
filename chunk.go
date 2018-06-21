@@ -1,10 +1,11 @@
 package rtmp
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 )
 
 var (
@@ -44,7 +45,7 @@ func genChunkHeader(ch *ChunkHeader) ([]byte, error) {
 	return x, nil
 }
 
-func readChunkHeader(br *bufio.Reader, oldHeaders []*ChunkHeader) (*ChunkHeader, error) {
+func readChunkHeader(br io.Reader, oldHeaders []*ChunkHeader) (*ChunkHeader, error) {
 	bh, err := readBasicHeader(br)
 	if err != nil {
 		return nil, err
@@ -60,7 +61,7 @@ func readChunkHeader(br *bufio.Reader, oldHeaders []*ChunkHeader) (*ChunkHeader,
 
 	if mh.Timestamp == 16777215 || mh.TimestampDelta == 16777215 {
 		x := make([]byte, 4)
-		_, err := io.ReadAtLeast(br, x, 4)
+		_, err := io.ReadFull(br, x)
 		if err != nil {
 			return nil, err
 		}
@@ -93,11 +94,19 @@ func genBasicHeader(bh *BasicHeader) ([]byte, error) {
 	}
 }
 
-func readBasicHeader(br *bufio.Reader) (*BasicHeader, error) {
-	x, err := br.ReadByte()
+func readBasicHeader(br io.Reader) (*BasicHeader, error) {
+	var err error
+	xx := make([]byte, 1)
+	_, err = io.ReadFull(br, xx)
 	if err != nil {
 		return nil, err
 	}
+	x := xx[0]
+	fmt.Printf("basic header first byte: %v\n", x)
+	if x == 255 {
+		panic("oops")
+	}
+
 	h := new(BasicHeader)
 	h.FMT = uint8(x) >> 6
 	csid := x & (32 + 16 + 8 + 4 + 2 + 1)
@@ -110,10 +119,12 @@ func readBasicHeader(br *bufio.Reader) (*BasicHeader, error) {
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		// |fmt|     0     |   cs id - 64  |
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		y, err := br.ReadByte()
+		yy := make([]byte, 1)
+		_, err := io.ReadFull(br, yy)
 		if err != nil {
 			return nil, err
 		}
+		y := yy[0]
 		h.ChunkStreamID = uint32(y) + 64
 	case 1:
 		// Chunk stream IDs: 64-65599
@@ -123,7 +134,7 @@ func readBasicHeader(br *bufio.Reader) (*BasicHeader, error) {
 		// |fmt|     1     |         cs id - 64            |
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		z := make([]byte, 2)
-		_, err = io.ReadAtLeast(br, z, 2)
+		_, err = io.ReadFull(br, z)
 		if err != nil {
 			return nil, err
 		}
@@ -214,23 +225,24 @@ func genMessageHeader(mh *MessageHeader, fmt int) ([]byte, error) {
 	}
 }
 
-func readMessageHeader(br *bufio.Reader, bh *BasicHeader, oldHeaders []*ChunkHeader) (*MessageHeader, error) {
+func readMessageHeader(br io.Reader, bh *BasicHeader, oldHeaders []*ChunkHeader) (*MessageHeader, error) {
 	mh := new(MessageHeader)
 	switch bh.FMT {
 	case 0:
 		x := make([]byte, 11)
-		_, err := io.ReadAtLeast(br, x, 11)
+		_, err := io.ReadFull(br, x)
 		if err != nil {
 			return nil, err
 		}
 		mh.Timestamp = binary.BigEndian.Uint32(append([]byte{0x0}, x[:3]...))
 		mh.MessageLength = binary.BigEndian.Uint32(append([]byte{0x0}, x[3:6]...))
 		mh.MessageTypeID = x[6]
-		mh.MessageStreamID = binary.BigEndian.Uint32(x[7:11])
+		mh.MessageStreamID = binary.LittleEndian.Uint32(x[7:11])
+		log.Printf("message stream id=%v be=%v", x[7:11], mh.MessageStreamID)
 		return mh, nil
 	case 1:
 		x := make([]byte, 7)
-		_, err := io.ReadAtLeast(br, x, 7)
+		_, err := io.ReadFull(br, x)
 		if err != nil {
 			return nil, err
 		}
@@ -240,11 +252,11 @@ func readMessageHeader(br *bufio.Reader, bh *BasicHeader, oldHeaders []*ChunkHea
 		return mh, nil
 	case 2:
 		x := make([]byte, 3)
-		_, err := io.ReadAtLeast(br, x, 3)
+		_, err := io.ReadFull(br, x)
 		if err != nil {
 			return nil, err
 		}
-		mh.TimestampDelta = binary.BigEndian.Uint32(x)
+		mh.TimestampDelta = binary.BigEndian.Uint32(append([]byte{0x0}, x...))
 		return mh, nil
 	case 3:
 		var prevHeader *ChunkHeader
