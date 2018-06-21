@@ -68,6 +68,7 @@ type conn struct {
 	state      ConnectionState
 	chunkSize  uint32
 	streamName string
+	oldHeaders []*ChunkHeader
 }
 
 func (c *conn) serve() error {
@@ -193,13 +194,20 @@ func (c *conn) handshake() error {
 }
 
 func (c *conn) readChunk() error {
-	header, err := readChunkHeader(c.bufr)
+	header, err := readChunkHeader(c.bufr, c.oldHeaders)
 	if err == io.EOF {
 		c.server.logf("Got EOF")
 		return nil
 	} else if err != nil {
 		c.server.logf("Error while readChunkHeader: %s", err)
 		return err
+	}
+
+	if header.BasicHeader.FMT != 3 {
+		if len(c.oldHeaders) > 100 {
+			c.oldHeaders = c.oldHeaders[:len(c.oldHeaders)-1]
+		}
+		c.oldHeaders = append([]*ChunkHeader{header}, c.oldHeaders...)
 	}
 
 	switch MessageType(header.MessageHeader.MessageTypeID) {
