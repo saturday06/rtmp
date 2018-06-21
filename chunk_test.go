@@ -43,7 +43,7 @@ func TestGenerateBasicHeader(t *testing.T) {
 func TestReadMessageHeader(t *testing.T) {
 	header := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0xb8, 0x14, 0x00, 0x00, 0x00, 0x00}
 	in := bufio.NewReader(bytes.NewBuffer(header))
-	actual, err := readMessageHeader(in, 0)
+	actual, err := readMessageHeader(in, &BasicHeader{0, 0}, nil)
 	if err != nil {
 		t.Errorf("Should be nil, but got %s", err)
 	}
@@ -84,7 +84,7 @@ func TestReadChunkHeader(t *testing.T) {
 	// message stream id (4 bytes) = 0000 0000 0000 0000 0000 0000 0000 0000
 	header := []byte{0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb8, 0x14, 0x00, 0x00, 0x00, 0x00}
 	in := bufio.NewReader(bytes.NewBuffer(header))
-	actual, err := readChunkHeader(in)
+	actual, err := readChunkHeader(in, nil)
 	if err != nil {
 		t.Errorf("Should be nil, but got %s", err)
 	}

@@ -27,7 +27,7 @@ func TestReadConnectMessage(t *testing.T) {
 	}
 	inReader := bufio.NewReader(bytes.NewBuffer(in))
 
-	ch, err := readChunkHeader(inReader)
+	ch, err := readChunkHeader(inReader, nil)
 	if err != nil {
 		t.Errorf("should be nil, but got %s", err)
 	}
@@ -65,13 +65,15 @@ func TestReadReleaseStreamMessage(t *testing.T) {
 	}
 	inReader := bufio.NewReader(bytes.NewBuffer(in))
 
+	var chs []*ChunkHeader
 	for {
-		ch, err := readChunkHeader(inReader)
+		ch, err := readChunkHeader(inReader, chs)
 		if err == io.EOF {
 			return
 		} else if err != nil {
 			t.Errorf("should be nil, but got %s", err)
 		}
+		chs = append(chs, ch)
 
 		payload := make([]byte, ch.MessageHeader.MessageLength)
 		_, err = io.ReadAtLeast(inReader, payload, int(ch.MessageHeader.MessageLength))
@@ -107,10 +109,12 @@ func TestReadFCPublishAndCreateStreamMessage(t *testing.T) {
 	}
 	inReader := bufio.NewReader(bytes.NewBuffer(in))
 
-	ch, err := readChunkHeader(inReader)
+	var chs []*ChunkHeader
+	ch, err := readChunkHeader(inReader, chs)
 	if err != nil {
 		t.Errorf("should be nil, but got %s", err)
 	}
+	chs = append(chs, ch)
 	if ch.BasicHeader.ChunkStreamID != 3 {
 		t.Errorf("ChunkStreamID should be 3, but got %d", ch.BasicHeader.ChunkStreamID)
 	}
@@ -133,10 +137,11 @@ func TestReadFCPublishAndCreateStreamMessage(t *testing.T) {
 		fmt.Printf("Value: %#v\n", v)
 	}
 
-	ch, err = readChunkHeader(inReader)
+	ch, err = readChunkHeader(inReader, chs)
 	if err != nil {
 		t.Errorf("should be nil, but got %s", err)
 	}
+	chs = append(chs, ch)
 	if ch.BasicHeader.ChunkStreamID != 3 {
 		t.Errorf("ChunkStreamID should be 3, but got %d", ch.BasicHeader.ChunkStreamID)
 	}
@@ -175,13 +180,15 @@ func TestParseOnFCPublishAndResultMessage(t *testing.T) {
 	}
 	inReader := bufio.NewReader(bytes.NewBuffer(in))
 
+	var chs []*ChunkHeader
 	for {
-		ch, err := readChunkHeader(inReader)
+		ch, err := readChunkHeader(inReader, chs)
 		if err == io.EOF {
 			return
 		} else if err != nil {
 			t.Errorf("should be nil, but got %s", err)
 		}
+		chs = append(chs, ch)
 
 		payload := make([]byte, ch.MessageHeader.MessageLength)
 		_, err = io.ReadAtLeast(inReader, payload, int(ch.MessageHeader.MessageLength))
@@ -214,13 +221,15 @@ func TestReadUserControlMessageStreamBegin(t *testing.T) {
 	}
 	inReader := bufio.NewReader(bytes.NewBuffer(in))
 
+	var chs []*ChunkHeader
 	for {
-		ch, err := readChunkHeader(inReader)
+		ch, err := readChunkHeader(inReader, chs)
 		if err == io.EOF {
 			return
 		} else if err != nil {
 			t.Errorf("should be nil, but got %s", err)
 		}
+		chs = append(chs, ch)
 
 		payload := make([]byte, ch.MessageHeader.MessageLength)
 		_, err = io.ReadAtLeast(inReader, payload, int(ch.MessageHeader.MessageLength))
@@ -255,13 +264,15 @@ func TestReadPublish(t *testing.T) {
 	}
 	inReader := bufio.NewReader(bytes.NewBuffer(in))
 
+	var chs []*ChunkHeader
 	for {
-		ch, err := readChunkHeader(inReader)
+		ch, err := readChunkHeader(inReader, chs)
 		if err == io.EOF {
 			return
 		} else if err != nil {
 			t.Errorf("should be nil, but got %s", err)
 		}
+		chs = append(chs, ch)
 
 		payload := make([]byte, ch.MessageHeader.MessageLength)
 		_, err = io.ReadAtLeast(inReader, payload, int(ch.MessageHeader.MessageLength))
@@ -301,13 +312,15 @@ func TestReadOnStatusPublish(t *testing.T) {
 	}
 	inReader := bufio.NewReader(bytes.NewBuffer(in))
 
+	var chs []*ChunkHeader
 	for {
-		ch, err := readChunkHeader(inReader)
+		ch, err := readChunkHeader(inReader, chs)
 		if err == io.EOF {
 			return
 		} else if err != nil {
 			t.Errorf("should be nil, but got %s", err)
 		}
+		chs = append(chs, ch)
 
 		payload := make([]byte, ch.MessageHeader.MessageLength)
 		_, err = io.ReadAtLeast(inReader, payload, int(ch.MessageHeader.MessageLength))

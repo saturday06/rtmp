@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 
 	"github.com/zhangpeihao/goamf"
@@ -61,13 +63,12 @@ const (
 type conn struct {
 	netconn    net.Conn
 	server     *Server
-	bufr       *bufio.Reader
+	bufr       io.Reader
 	bufw       *bufio.Writer
-	readbuf    []byte
-	writebuf   []byte
 	state      ConnectionState
 	chunkSize  uint32
 	streamName string
+	oldHeaders []*ChunkHeader
 }
 
 func (c *conn) serve() error {
@@ -192,8 +193,10 @@ func (c *conn) handshake() error {
 	return nil
 }
 
+var bindex = 0
+
 func (c *conn) readChunk() error {
-	header, err := readChunkHeader(c.bufr)
+	header, _, err := readChunkHeader(c.bufr, c.oldHeaders)
 	if err == io.EOF {
 		c.server.logf("Got EOF")
 		return nil
@@ -201,6 +204,11 @@ func (c *conn) readChunk() error {
 		c.server.logf("Error while readChunkHeader: %s", err)
 		return err
 	}
+
+	if len(c.oldHeaders) > 100 {
+		c.oldHeaders = c.oldHeaders[:len(c.oldHeaders)-1]
+	}
+	c.oldHeaders = append([]*ChunkHeader{header}, c.oldHeaders...)
 
 	switch MessageType(header.MessageHeader.MessageTypeID) {
 	case MessageSetChunkSize:
@@ -213,7 +221,7 @@ func (c *conn) readChunk() error {
 			return errors.New("the payload length of Set Chunk Size command should be 4")
 		}
 		payload := make([]byte, 4)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(4))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
@@ -227,7 +235,7 @@ func (c *conn) readChunk() error {
 		// |                   chunk stream id (32 bits)                   |
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
@@ -241,7 +249,7 @@ func (c *conn) readChunk() error {
 		// |                    sequence number (4 bytes)                  |
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
@@ -250,7 +258,7 @@ func (c *conn) readChunk() error {
 		return nil
 	case MessageUserControl:
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
@@ -263,7 +271,7 @@ func (c *conn) readChunk() error {
 		// |              Acknowledgement Window size (4 bytes)            |
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
@@ -279,7 +287,7 @@ func (c *conn) readChunk() error {
 		// |  Limit Type   |
 		// +-+-+-+-+-+-+-+-+
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
@@ -289,62 +297,91 @@ func (c *conn) readChunk() error {
 		return nil
 	case MessageAudio:
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
-		c.server.logf("Catch audio message")
+		ioutil.WriteFile(fmt.Sprintf("%05d.bin", bindex), payload, 0644)
+		bindex += 1
+		c.server.logf("Catch audio message fmt=%v cstreamid=%v ts=%v:%v mlen=%v mtyp=%v mstre=%v e=%v",
+			header.BasicHeader.FMT,
+			header.BasicHeader.ChunkStreamID,
+			header.MessageHeader.Timestamp,
+			header.MessageHeader.TimestampDelta,
+			header.MessageHeader.MessageLength,
+			header.MessageHeader.MessageTypeID,
+			header.MessageHeader.MessageStreamID,
+			header.ExtendedTimestamp,
+		)
 	case MessageVideo:
-		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		r := header.MessageHeader.MessageLength
+		if r > c.chunkSize {
+			r = c.chunkSize
+			header.MessageHeader.MessageLength -= r
+		}
+		payload := make([]byte, r)
+		l, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
-		c.server.logf("Catch video message")
+		c.server.logf("Catch video message fmt=%v cstreamid=%v ts=%v:%v mlen=%v mtyp=%v mstre=%v e=%v l=%v",
+			header.BasicHeader.FMT,
+			header.BasicHeader.ChunkStreamID,
+			header.MessageHeader.Timestamp,
+			header.MessageHeader.TimestampDelta,
+			header.MessageHeader.MessageLength,
+			header.MessageHeader.MessageTypeID,
+			header.MessageHeader.MessageStreamID,
+			header.ExtendedTimestamp,
+			l,
+		)
+		ioutil.WriteFile(fmt.Sprintf("%05d.bin", bindex), payload, 0644)
+		bindex += 1
+		//c.server.logf("data=%v", payload[header.MessageHeader.MessageLength-1])
 	case MessageDataAMF3:
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
 		c.server.logf("Catch DataMessage(AMF3)")
 	case MessageCommandAMF3:
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
 		c.server.logf("Catch AMF3 Command Message")
 	case MessageSharedObjectAMF3:
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
 		c.server.logf("Catch SharedObjectMessage(AMF0)")
 	case MessageDataAMF0:
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
 		c.server.logf("Catch DataMessage(AMF0)")
 	case MessageCommandAMF0:
 		c.server.logf("Catch AMF0 Command Message")
-		err = c.handleCommandMessageAFM0(header)
+		err = c.handleCommandMessageAMF0(header)
 		if err != nil {
 			return err
 		}
 	case MessageSharedObjectAMF0:
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
 		c.server.logf("Catch SharedObjectMessage(AMF0)")
 	case MessageAggregate:
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
@@ -354,7 +391,7 @@ func (c *conn) readChunk() error {
 		c.server.logf("%#v", header.BasicHeader)
 		c.server.logf("%#v", header.MessageHeader)
 		payload := make([]byte, header.MessageHeader.MessageLength)
-		_, err := io.ReadAtLeast(c.bufr, payload, int(header.MessageHeader.MessageLength))
+		_, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
 		}
@@ -363,10 +400,10 @@ func (c *conn) readChunk() error {
 	return nil
 }
 
-func (c *conn) handleCommandMessageAFM0(header *ChunkHeader) error {
+func (c *conn) handleCommandMessageAMF0(header *ChunkHeader) error {
 	ml := header.MessageHeader.MessageLength
 	payload := make([]byte, ml)
-	_, err := io.ReadAtLeast(c.bufr, payload, int(ml))
+	_, err := io.ReadFull(c.bufr, payload)
 	if err != nil {
 		return err
 	}
@@ -383,17 +420,6 @@ func (c *conn) handleCommandMessageAFM0(header *ChunkHeader) error {
 
 	switch commandName {
 	case "connect":
-		// Maybe this is bug of ffmpeg(librtmp). 0xc3 is in tcp byte stream.
-		// Cause of this strange byte, the payload length does not equals with message length in Message Header.
-		for i := range payload {
-			if payload[i] == 0xc3 {
-				if _, err := c.bufr.ReadByte(); err != nil {
-					return err
-				}
-				break
-			}
-		}
-
 		c.server.logf("Receive connect command message (transactionID: %f).", transactionID)
 		// Send window acknowledgement
 		was, err := GenerateWindowAcknowledgementSizeChunk(WindowAcknowledgementSize)

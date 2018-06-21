@@ -1,15 +1,17 @@
 package rtmp
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 )
 
 var (
 	errUnknownFMT           = errors.New("unknown fmt")
 	errInvalidChunkStreamID = errors.New("invalid chunk stream id")
+	errNoPreceedingChunk    = errors.New("basic header fmt is 3 but no preceeding chunk")
 )
 
 // Chunk Header
@@ -43,15 +45,20 @@ func genChunkHeader(ch *ChunkHeader) ([]byte, error) {
 	return x, nil
 }
 
-func readChunkHeader(br *bufio.Reader) (*ChunkHeader, error) {
-	bh, err := readBasicHeader(br)
+func readChunkHeader(br io.Reader, oldHeaders []*ChunkHeader) (*ChunkHeader, int, error) {
+	chLen := 0
+	bh, bhLen, err := readBasicHeader(br)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	mh, err := readMessageHeader(br, bh.FMT)
+	chLen += bhLen
+
+	mh, mhLen, err := readMessageHeader(br, bh, oldHeaders)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	chLen += mhLen
+
 	ch := &ChunkHeader{
 		BasicHeader:   bh,
 		MessageHeader: mh,
@@ -59,13 +66,14 @@ func readChunkHeader(br *bufio.Reader) (*ChunkHeader, error) {
 
 	if mh.Timestamp == 16777215 || mh.TimestampDelta == 16777215 {
 		x := make([]byte, 4)
-		_, err := io.ReadAtLeast(br, x, 4)
+		_, err := io.ReadFull(br, x)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		ch.ExtendedTimestamp = binary.BigEndian.Uint32(x)
+		chLen += 4
 	}
-	return ch, nil
+	return ch, chLen, nil
 }
 
 type BasicHeader struct {
@@ -92,11 +100,19 @@ func genBasicHeader(bh *BasicHeader) ([]byte, error) {
 	}
 }
 
-func readBasicHeader(br *bufio.Reader) (*BasicHeader, error) {
-	x, err := br.ReadByte()
+func readBasicHeader(br io.Reader) (*BasicHeader, int, error) {
+	var err error
+	xx := make([]byte, 1)
+	_, err = io.ReadFull(br, xx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	x := xx[0]
+	fmt.Printf("basic header first byte: %v\n", x)
+	if x == 255 {
+		panic("oops")
+	}
+
 	h := new(BasicHeader)
 	h.FMT = uint8(x) >> 6
 	csid := x & (32 + 16 + 8 + 4 + 2 + 1)
@@ -109,11 +125,14 @@ func readBasicHeader(br *bufio.Reader) (*BasicHeader, error) {
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		// |fmt|     0     |   cs id - 64  |
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		y, err := br.ReadByte()
+		yy := make([]byte, 1)
+		_, err := io.ReadFull(br, yy)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		y := yy[0]
 		h.ChunkStreamID = uint32(y) + 64
+		return h, 2, nil
 	case 1:
 		// Chunk stream IDs: 64-65599
 		//  0                   1                   2
@@ -122,11 +141,12 @@ func readBasicHeader(br *bufio.Reader) (*BasicHeader, error) {
 		// |fmt|     1     |         cs id - 64            |
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		z := make([]byte, 2)
-		_, err = io.ReadAtLeast(br, z, 2)
+		_, err = io.ReadFull(br, z)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		h.ChunkStreamID = uint32(binary.BigEndian.Uint16(z)) + 64
+		return h, 3, nil
 	default:
 		// Chunk Stream IDs: 2-63
 		//  0 1 2 3 4 5 6 7
@@ -134,8 +154,8 @@ func readBasicHeader(br *bufio.Reader) (*BasicHeader, error) {
 		// |fmt|   cs id   |
 		// +-+-+-+-+-+-+-+-+
 		h.ChunkStreamID = uint32(csid)
+		return h, 1, nil
 	}
-	return h, nil
 }
 
 type MessageHeader struct {
@@ -213,41 +233,57 @@ func genMessageHeader(mh *MessageHeader, fmt int) ([]byte, error) {
 	}
 }
 
-func readMessageHeader(br *bufio.Reader, fmt uint8) (*MessageHeader, error) {
+func readMessageHeader(br io.Reader, bh *BasicHeader, oldHeaders []*ChunkHeader) (*MessageHeader, int, error) {
 	mh := new(MessageHeader)
-	switch fmt {
+	switch bh.FMT {
 	case 0:
 		x := make([]byte, 11)
-		_, err := io.ReadAtLeast(br, x, 11)
+		_, err := io.ReadFull(br, x)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		mh.Timestamp = binary.BigEndian.Uint32(append([]byte{0x0}, x[:3]...))
 		mh.MessageLength = binary.BigEndian.Uint32(append([]byte{0x0}, x[3:6]...))
 		mh.MessageTypeID = x[6]
-		mh.MessageStreamID = binary.BigEndian.Uint32(x[7:11])
-		return mh, nil
+		mh.MessageStreamID = binary.LittleEndian.Uint32(x[7:11])
+		log.Printf("message stream id=%v be=%v", x[7:11], mh.MessageStreamID)
+		return mh, 11, nil
 	case 1:
 		x := make([]byte, 7)
-		_, err := io.ReadAtLeast(br, x, 7)
+		_, err := io.ReadFull(br, x)
 		if err != nil {
-			return nil, err
+			return nil, 7, err
 		}
 		mh.TimestampDelta = binary.BigEndian.Uint32(append([]byte{0x0}, x[:3]...))
 		mh.MessageLength = binary.BigEndian.Uint32(append([]byte{0x0}, x[3:6]...))
 		mh.MessageTypeID = x[6]
-		return mh, nil
+		return mh, 7, nil
 	case 2:
 		x := make([]byte, 3)
-		_, err := io.ReadAtLeast(br, x, 3)
+		_, err := io.ReadFull(br, x)
 		if err != nil {
-			return nil, err
+			return nil, 3, err
 		}
-		mh.TimestampDelta = binary.BigEndian.Uint32(x)
-		return mh, nil
+		if len(oldHeaders) == 0 {
+			return nil, 0, errNoPreceedingChunk
+		}
+		*mh = *(oldHeaders[0].MessageHeader)
+		mh.TimestampDelta = binary.BigEndian.Uint32(append([]byte{0x0}, x...))
+		return mh, 3, nil
 	case 3:
-		return mh, nil
+		var prevHeader *ChunkHeader
+		for _, h := range oldHeaders {
+			if h.BasicHeader.ChunkStreamID == bh.ChunkStreamID {
+				prevHeader = h
+				break
+			}
+		}
+		if prevHeader == nil {
+			return nil, 0, errNoPreceedingChunk
+		}
+		*mh = *prevHeader.MessageHeader
+		return mh, 0, nil
 	default:
-		return nil, errUnknownFMT
+		return nil, 0, errUnknownFMT
 	}
 }
