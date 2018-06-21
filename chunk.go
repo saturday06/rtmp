@@ -264,6 +264,10 @@ func readMessageHeader(br io.Reader, bh *BasicHeader, oldHeaders []*ChunkHeader)
 		if err != nil {
 			return nil, 3, err
 		}
+		if len(oldHeaders) == 0 {
+			return nil, 0, errNoPreceedingChunk
+		}
+		*mh = *(oldHeaders[0].MessageHeader)
 		mh.TimestampDelta = binary.BigEndian.Uint32(append([]byte{0x0}, x...))
 		return mh, 3, nil
 	case 3:
