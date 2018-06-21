@@ -196,7 +196,7 @@ func (c *conn) handshake() error {
 var bindex = 0
 
 func (c *conn) readChunk() error {
-	header, err := readChunkHeader(c.bufr, c.oldHeaders)
+	header, _, err := readChunkHeader(c.bufr, c.oldHeaders)
 	if err == io.EOF {
 		c.server.logf("Got EOF")
 		return nil
@@ -205,12 +205,10 @@ func (c *conn) readChunk() error {
 		return err
 	}
 
-	if header.BasicHeader.FMT != 3 {
-		if len(c.oldHeaders) > 100 {
-			c.oldHeaders = c.oldHeaders[:len(c.oldHeaders)-1]
-		}
-		c.oldHeaders = append([]*ChunkHeader{header}, c.oldHeaders...)
+	if len(c.oldHeaders) > 100 {
+		c.oldHeaders = c.oldHeaders[:len(c.oldHeaders)-1]
 	}
+	c.oldHeaders = append([]*ChunkHeader{header}, c.oldHeaders...)
 
 	switch MessageType(header.MessageHeader.MessageTypeID) {
 	case MessageSetChunkSize:
@@ -316,7 +314,12 @@ func (c *conn) readChunk() error {
 			header.ExtendedTimestamp,
 		)
 	case MessageVideo:
-		payload := make([]byte, header.MessageHeader.MessageLength)
+		r := header.MessageHeader.MessageLength
+		if r > c.chunkSize {
+			r = c.chunkSize
+			header.MessageHeader.MessageLength -= r
+		}
+		payload := make([]byte, r)
 		l, err := io.ReadFull(c.bufr, payload)
 		if err != nil {
 			return err
@@ -334,7 +337,7 @@ func (c *conn) readChunk() error {
 		)
 		ioutil.WriteFile(fmt.Sprintf("%05d.bin", bindex), payload, 0644)
 		bindex += 1
-		c.server.logf("data=%v", payload[header.MessageHeader.MessageLength-1])
+		//c.server.logf("data=%v", payload[header.MessageHeader.MessageLength-1])
 	case MessageDataAMF3:
 		payload := make([]byte, header.MessageHeader.MessageLength)
 		_, err := io.ReadFull(c.bufr, payload)
@@ -417,18 +420,6 @@ func (c *conn) handleCommandMessageAMF0(header *ChunkHeader) error {
 
 	switch commandName {
 	case "connect":
-		// Maybe this is bug of ffmpeg(librtmp). 0xc3 is in tcp byte stream.
-		// Cause of this strange byte, the payload length does not equals with message length in Message Header.
-		for i := range payload {
-			if payload[i] == 0xc3 {
-				bb := make([]byte, 1)
-				if _, err := io.ReadFull(c.bufr, bb); err != nil {
-					return err
-				}
-				break
-			}
-		}
-
 		c.server.logf("Receive connect command message (transactionID: %f).", transactionID)
 		// Send window acknowledgement
 		was, err := GenerateWindowAcknowledgementSizeChunk(WindowAcknowledgementSize)
